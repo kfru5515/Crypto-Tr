@@ -12,6 +12,8 @@ upbit = ccxt.upbit({
     'secret': config.Ubpit_SecretKey,
 })
 
+# Constants for breakout strategy
+BREAKOUT_PERIODS = 20
 def balance():
     balance_info = upbit.fetch_balance()
     krw_balance = balance_info['total']['KRW']
@@ -22,6 +24,66 @@ def balance():
     # Display total balance
     display_total_balance(balance_info)
 
+def check_breakout_conditions(market):
+    try:
+        # Fetch OHLCV (Open, High, Low, Close, Volume) data for the specified market
+        ohlcv = upbit.fetch_ohlcv(market, timeframe='1h', limit=BREAKOUT_PERIODS)
+
+        # Extract high and low prices from the last 'n' periods
+        high_prices = ohlcv[:, 2]  # High prices are in the third column
+        low_prices = ohlcv[:, 3]   # Low prices are in the fourth column
+
+        # Calculate highest high and lowest low
+        highest_high = max(high_prices)
+        lowest_low = min(low_prices)
+
+        # Fetch the current ticker for the market
+        ticker = upbit.fetch_ticker(market)
+        current_price = ticker['close']
+
+        # Check breakout conditions
+        if current_price > highest_high:
+            return 'buy'
+        elif current_price < lowest_low:
+            return 'sell'
+        else:
+            return None
+
+    except ccxt.NetworkError as e:
+        handle_error(f"Network error while checking breakout conditions: {e}\n")
+        return None
+    except ccxt.ExchangeError as e:
+        handle_error(f"Exchange error while checking breakout conditions: {e}\n")
+        return None
+    except Exception as e:
+        handle_error(f"An error occurred while checking breakout conditions: {e}\n")
+        return None
+    
+    
+def auto_execute_breakout_strategy():
+    while True:
+        try:
+            market = market_var.get()
+
+            # Check breakout conditions
+            breakout_signal = check_breakout_conditions(market)
+
+            if breakout_signal == 'buy':
+                # Implement buy logic here
+                auto_buy()
+            elif breakout_signal == 'sell':
+                # Implement sell logic here if needed
+                auto_sell()
+
+            # Sleep for a period before checking breakout conditions again
+            time.sleep(60)
+
+        except ccxt.NetworkError as e:
+            handle_error(f"Network error: {e}\n")
+        except ccxt.ExchangeError as e:
+            handle_error(f"Exchange error: {e}\n")
+        except Exception as e:
+            handle_error(f"An unexpected error occurred: {e}\n")
 
 def buy():
     try: 
@@ -47,6 +109,29 @@ def buy():
     except Exception as e:
         result_text.insert(tk.END, f"An unexpected error occurred: {e}\n")
 
+def auto_buy():
+    try:
+        market = market_var.get()
+
+        balance_info = upbit.fetch_balance()
+        available_krw_balance = balance_info['total']['KRW']
+
+        ticker = upbit.fetch_ticker(market)
+        last_price = ticker['close']
+
+        amount_to_buy = available_krw_balance / last_price
+
+        breakout_signal = check_breakout_conditions(market)
+        if breakout_signal == 'buy':
+            order = upbit.create_limit_buy_order(market, amount_to_buy, last_price)
+            handle_order_result(order, "Auto Buy")
+
+    except ccxt.NetworkError as e:
+        result_text.insert(tk.END, f"Network error: {e}\n")
+    except ccxt.ExchangeError as e:
+        result_text.insert(tk.END, f"Exchange error: {e}\n")
+    except Exception as e:
+        result_text.insert(tk.END, f"An unexpected error occurred: {e}\n")
 
 def sell():
     try: 
@@ -65,6 +150,39 @@ def sell():
         result_text.insert(tk.END, f"Exchange error: {e}\n")
     except Exception as e:
         result_text.insert(tk.END, f"An unexpected error occurred: {e}\n")
+def auto_sell():
+    try:
+        market = market_var.get()
+
+        base_currency = market.split('/')[0]
+
+        balance_info = upbit.fetch_balance()
+        if base_currency not in balance_info['total']:
+            result_text.insert(tk.END, f"Error: Balance information for {base_currency} not available.\n")
+            return
+        currency_balance = balance_info['total'][base_currency]
+        
+        ticker = upbit.fetch_ticker(market)
+        last_price = ticker['close']
+        breakout_signal = check_breakout_conditions(market)
+        if breakout_signal == 'sell' and currency_balance > 0:
+            order = upbit.create_market_sell_order(market, currency_balance)
+            handle_order_result(order, "Auto Sell")
+
+        # Place a market sell order if the current price breaks below the lowest low
+        breakout_signal = check_breakout_conditions(market)
+        if breakout_signal == 'sell' and currency_balance > 0:
+            order = upbit.create_market_sell_order(market, currency_balance)
+            handle_order_result(order, "Auto Sell")
+
+
+    except ccxt.NetworkError as e:
+        result_text.insert(tk.END, f"Network error: {e}\n")
+    except ccxt.ExchangeError as e:
+        result_text.insert(tk.END, f"Exchange error: {e}\n")
+    except Exception as e:
+        result_text.insert(tk.END, f"An unexpected error occurred: {e}\n")
+
 
 def handle_order_result(order, order_type):
     if 'info' in order:
@@ -100,47 +218,9 @@ def update_balance_text(text):
 def handle_error(error_message):
     result_text.insert(tk.END, error_message)
 
-# Trading strategy functions
-def breakout_trading(symbol, timeframe='1h', breakout_percentage=1.0):
-    breakout_percentage /= 100.0
-    while True:
-        try:
-            candles = get_recent_candle(symbol, timeframe)
-
-            support, resistance = calculate_support_resistance(candles)
-            last_close = candles[-1][4]
-
-            if last_close > resistance:
-                print(f"Buy Signal: {symbol} Breakout Above Resistance ({last_close} > {resistance})")
-                # Implement your buy order logic here
-
-            elif last_close < support:
-                print(f"Sell Signal: {symbol} Breakout Below Support ({last_close} < {support})")
-                # Implement your sell order logic here
-            time.sleep(60)
-
-        except ccxt.NetworkError as e:
-            print(f"Network error: {e}")
-        except ccxt.ExchangeError as e:
-            print(f"Exchange error: {e}")
-        except Exception as e:
-            print(f"An unexpected error occurred: {e}")
-
-def get_all_trading_pairs():
-    markets = upbit.fetch_markets()
-    return [market['symbol'] for market in markets if market['active']]
-
-def get_recent_candle(symbol, timeframe='1h', limit=10):
-    candles = upbit.fetch_ohlcv(symbol, timeframe, limit=limit)
-    return candles
-def calculate_support_resistance(candles):
-    closes = [candle[4] for candle in candles]
-    support = min(closes)
-    resistance = max(closes)
-    return support, resistance
-
-def choose_trading_pair(trading_pairs):
-    return trading_pairs[0]
+def auto_buy_sell():
+    auto_buy()
+    auto_sell()
 
 # GUI functions
 def fetch_initial_balance():
@@ -157,9 +237,6 @@ def update_balance():
 
     except Exception as e:
         update_balance_text(f"An error occurred while updating balance: {e}\n")
-def start_breakout_trading(symbol):
-    breakout_thread = threading.Thread(target=breakout_trading, args=(symbol,))
-    breakout_thread.start()
     
 def get_gui():
     global amount_entry, result_text, market_var, balance_text  # Declare the variables as global before using them
@@ -176,18 +253,6 @@ def get_gui():
     breakout_button_frame = tk.Frame(app)
     breakout_button_frame.pack(side=tk.TOP, pady=10)
 
-    breakout_symbol_label = tk.Label(breakout_button_frame, text="Symbol for Breakout Trading:")
-    breakout_symbol_label.pack(side=tk.LEFT, padx=10)
-
-    breakout_symbols = get_all_trading_pairs()
-
-    breakout_symbol_var = tk.StringVar(app)
-    breakout_symbol_dropdown = ttk.Combobox(breakout_button_frame, textvariable=breakout_symbol_var, values=breakout_symbols)
-    breakout_symbol_dropdown.pack(side=tk.LEFT, padx=10)
-    breakout_symbol_dropdown.set(breakout_symbols[0])
-
-    breakout_button = tk.Button(breakout_button_frame, text="Start Breakout Trading", command=lambda: start_breakout_trading(breakout_symbol_var.get()))
-    breakout_button.pack(side=tk.LEFT, padx=10)
 
     amount_label = tk.Label(button_frame, text="Amount:")
     amount_label.pack(side=tk.LEFT, padx=10)
@@ -217,13 +282,15 @@ def get_gui():
 
     balance_text = tk.Text(app, height=2, state=tk.DISABLED)
     balance_text.pack(pady=10)
+    #button for auto buy and sell
+    start_auto_execute_button = tk.Button(app, text="Start Auto Execute", command=lambda: threading.Thread(target=auto_execute_breakout_strategy).start())
+    start_auto_execute_button.pack(side=tk.TOP, anchor=tk.N, pady=10)
+
+    manual_auto_execute_button = tk.Button(app, text="Auto Buy/Sell", command=auto_buy_sell)
+    manual_auto_execute_button.pack(side=tk.TOP, anchor=tk.N, pady=10)
 
     fetch_initial_balance()
     app.mainloop()
 
 if __name__ == "__main__":
-    all_trading_pairs = get_all_trading_pairs()
-    selected_symbol = choose_trading_pair(all_trading_pairs)
-    breakout_thread = threading.Thread(target=breakout_trading, args=(selected_symbol,))
-    breakout_thread.start()
     get_gui()
